@@ -1,5 +1,13 @@
+"use strict";
+
 const TSV_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vROWLK8yc534HakCXX7LKb-Qqo1M29TfBU84B0BMnaC0r0sirlqmlIpAOc5rxic6M_TX8nfiui_Zriz/pub?gid=0&single=true&output=tsv";
+
+const CACHE_KEY = "lpa:catalogo:v1";
+const PAGE_SIZE = 24;
+const FETCH_TIMEOUT_MS = 15000;
+const SEARCH_DEBOUNCE_MS = 200;
+const VALID_SORTS = ["novedades", "titulo-asc", "autor-asc", "anio-desc", "anio-asc"];
 
 const FALLBACK_COVER_SVG =
   "data:image/svg+xml;charset=UTF-8," +
@@ -12,10 +20,16 @@ const FALLBACK_COVER_SVG =
     </svg>
   `);
 
+const collator = new Intl.Collator("es", { sensitivity: "base" });
+
 const state = {
   allBooks: [],
+  currentList: [],
+  rendered: 0,
+  visibleCount: PAGE_SIZE,
   filters: {
     search: "",
+    searchNorm: "",
     category: "",
     decade: "",
     author: "",
@@ -39,8 +53,19 @@ const els = {
   statusMessage: document.getElementById("statusMessage"),
   booksGrid: document.getElementById("booksGrid"),
   emptyState: document.getElementById("emptyState"),
+  loadMoreWrap: document.getElementById("loadMoreWrap"),
+  loadMoreBtn: document.getElementById("loadMoreBtn"),
   totalBooksFooter: document.getElementById("totalBooksFooter")
 };
+
+/* ---------- Utilidades ---------- */
+
+function createEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
 function normalizeText(value) {
   return String(value || "")
@@ -56,52 +81,101 @@ function parseYear(rawYear) {
 }
 
 function getDecadeInfo(year) {
-  if (typeof year !== "number" || Number.isNaN(year)) {
-    return null;
-  }
+  if (typeof year !== "number" || Number.isNaN(year)) return null;
   const start = Math.floor(year / 10) * 10;
-  const end = start + 9;
   return {
-    key: `${start}-${end}`,
-    label: `${start}–${end}`,
+    key: `${start}-${start + 9}`,
+    label: `${start}–${start + 9}`,
     start
   };
 }
 
-function parseTSV(tsvText) {
-  const lines = tsvText
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .filter((line) => line.trim() !== "");
+// Solo se aceptan enlaces http(s): evita "javascript:" u otros esquemas que vengan de la hoja.
+function safeUrl(raw) {
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, window.location.href);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : "";
+  } catch {
+    return "";
+  }
+}
 
-  if (lines.length <= 1) {
-    return [];
+/* ---------- Lectura del TSV ---------- */
+
+// Parser TSV que respeta celdas entre comillas (con saltos de línea, tabs y comillas dobles escapadas).
+function parseTSVRows(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"' && cell === "") {
+      inQuotes = true;
+    } else if (ch === "\t") {
+      row.push(cell);
+      cell = "";
+    } else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i += 1;
+      row.push(cell);
+      cell = "";
+      rows.push(row);
+      row = [];
+    } else {
+      cell += ch;
+    }
   }
 
-  const dataRows = lines.slice(1);
-  const parsed = [];
+  if (cell !== "" || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
 
-  dataRows.forEach((line, index) => {
-    const cols = line.split("\t").map((cell) => cell.trim());
-    const title = cols[0] || "";
-    const author = cols[1] || "";
-    const rawYear = cols[2] || "";
-    const category = cols[3] || "";
-    const description = cols[4] || "";
-    const link = cols[5] || "";
-    const cover = cols[6] || "";
-    const pass = cols[7] || "";
+  return rows;
+}
 
-    if (!title && !author && !description && !link) {
-      return;
-    }
+function parseBooks(tsvText) {
+  if (/^\s*<(!doctype|html)/i.test(tsvText)) {
+    throw new Error("La respuesta no es un TSV (¿la hoja dejó de estar publicada?)");
+  }
+
+  const rows = parseTSVRows(tsvText.replace(/^\uFEFF/, ""));
+  if (rows.length <= 1) return [];
+
+  const books = [];
+
+  rows.slice(1).forEach((cols, index) => {
+    const get = (i) => (cols[i] || "").trim();
+
+    const title = get(0);
+    const author = get(1);
+    const rawYear = get(2);
+    const category = get(3);
+    const description = get(4);
+    const link = safeUrl(get(5));
+    const cover = safeUrl(get(6));
+    const pass = get(7);
+
+    if (!title && !author && !description && !link) return;
 
     const yearNum = parseYear(rawYear);
     const decadeInfo = getDecadeInfo(yearNum);
 
-    parsed.push({
-      id: index + 1,
+    const book = {
       sheetOrder: index,
       title: title || "Sin título",
       author: author || "Autor desconocido",
@@ -115,395 +189,382 @@ function parseTSV(tsvText) {
       link,
       cover,
       pass
-    });
-  });
+    };
 
-  // Orden inverso por defecto: los últimos en la hoja aparecen primero (novedades)
-  return parsed.reverse();
-}
-
-function matchesBook(book, activeFilters, ignoreField = null) {
-  if (ignoreField !== "category" && activeFilters.category) {
-    if (book.category !== activeFilters.category) return false;
-  }
-
-  if (ignoreField !== "decade" && activeFilters.decade) {
-    if (book.decadeKey !== activeFilters.decade) return false;
-  }
-
-  if (ignoreField !== "author" && activeFilters.author) {
-    if (book.author !== activeFilters.author) return false;
-  }
-
-  if (ignoreField !== "search" && activeFilters.search) {
-    const q = normalizeText(activeFilters.search);
-    const haystack = normalizeText(
+    // Texto de búsqueda precalculado: evita normalizar todo el catálogo en cada pulsación.
+    book.searchText = normalizeText(
       `${book.title} ${book.author} ${book.description} ${book.category} ${book.yearLabel}`
     );
-    if (!haystack.includes(q)) return false;
-  }
 
+    books.push(book);
+  });
+
+  return books;
+}
+
+/* ---------- Filtros y orden ---------- */
+
+function matchesBook(book, f, ignoreField = null) {
+  if (ignoreField !== "category" && f.category && book.category !== f.category) return false;
+  if (ignoreField !== "decade" && f.decade && book.decadeKey !== f.decade) return false;
+  if (ignoreField !== "author" && f.author && book.author !== f.author) return false;
+  if (ignoreField !== "search" && f.searchNorm && !book.searchText.includes(f.searchNorm)) {
+    return false;
+  }
   return true;
+}
+
+// Los libros sin año siempre quedan al final.
+function compareYear(a, b, direction) {
+  if (a.yearNum === null && b.yearNum === null) return 0;
+  if (a.yearNum === null) return 1;
+  if (b.yearNum === null) return -1;
+  return direction * (a.yearNum - b.yearNum);
 }
 
 function getFilteredAndSortedBooks() {
   const filtered = state.allBooks.filter((book) => matchesBook(book, state.filters));
-  const sortMode = state.filters.sort;
 
-  const sorted = [...filtered].sort((a, b) => {
-    switch (sortMode) {
+  return filtered.sort((a, b) => {
+    const newestFirst = b.sheetOrder - a.sheetOrder;
+    switch (state.filters.sort) {
       case "titulo-asc":
-        return a.title.localeCompare(b.title, "es", { sensitivity: "base" });
+        return collator.compare(a.title, b.title) || newestFirst;
       case "autor-asc":
-        return a.author.localeCompare(b.author, "es", { sensitivity: "base" });
-      case "anio-desc": {
-        if (a.yearNum === null && b.yearNum === null) return b.sheetOrder - a.sheetOrder;
-        if (a.yearNum === null) return 1;
-        if (b.yearNum === null) return -1;
-        if (b.yearNum !== a.yearNum) return b.yearNum - a.yearNum;
-        return b.sheetOrder - a.sheetOrder;
-      }
-      case "anio-asc": {
-        if (a.yearNum === null && b.yearNum === null) return b.sheetOrder - a.sheetOrder;
-        if (a.yearNum === null) return 1;
-        if (b.yearNum === null) return -1;
-        if (a.yearNum !== b.yearNum) return a.yearNum - b.yearNum;
-        return b.sheetOrder - a.sheetOrder;
-      }
+        return collator.compare(a.author, b.author) || newestFirst;
+      case "anio-desc":
+        return compareYear(a, b, -1) || newestFirst;
+      case "anio-asc":
+        return compareYear(a, b, 1) || newestFirst;
       case "novedades":
       default:
-        return b.sheetOrder - a.sheetOrder;
+        return newestFirst;
     }
   });
-
-  return sorted;
 }
 
 function populateSelectOptions(selectEl, options, currentValue, defaultLabel) {
-  selectEl.innerHTML = "";
+  const fragment = document.createDocumentFragment();
+
   const defaultOpt = document.createElement("option");
   defaultOpt.value = "";
   defaultOpt.textContent = defaultLabel;
-  selectEl.appendChild(defaultOpt);
+  fragment.appendChild(defaultOpt);
 
   options.forEach((opt) => {
     const optionEl = document.createElement("option");
     optionEl.value = opt.value;
     optionEl.textContent = opt.label;
-    selectEl.appendChild(optionEl);
+    fragment.appendChild(optionEl);
   });
 
-  if (currentValue && options.some((o) => o.value === currentValue)) {
-    selectEl.value = currentValue;
-  } else {
-    selectEl.value = "";
-  }
+  selectEl.replaceChildren(fragment);
+  selectEl.value = currentValue && options.some((o) => o.value === currentValue) ? currentValue : "";
 }
 
+// Filtros en cascada: cada lista solo ofrece valores que existen con los demás filtros activos.
 function updateDynamicFilterOptions() {
-  const booksForCategory = state.allBooks.filter((b) => matchesBook(b, state.filters, "category"));
-  const categories = [...new Set(booksForCategory.map((b) => b.category).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }))
-    .map((cat) => ({ value: cat, label: cat }));
-
-  if (state.filters.category && !categories.some((c) => c.value === state.filters.category)) {
-    state.filters.category = "";
-  }
-  populateSelectOptions(
-    els.categoryFilter,
-    categories,
-    state.filters.category,
-    "Todas las categorías"
-  );
-
-  const booksForDecade = state.allBooks.filter((b) => matchesBook(b, state.filters, "decade"));
-  const decadeMap = new Map();
-  booksForDecade.forEach((b) => {
-    if (b.decadeKey && !decadeMap.has(b.decadeKey)) {
-      decadeMap.set(b.decadeKey, {
-        value: b.decadeKey,
-        label: b.decadeLabel,
-        start: b.decadeStart
-      });
+  const specs = [
+    {
+      field: "category",
+      el: els.categoryFilter,
+      label: "Todas las categorías",
+      pick: (b) => ({ value: b.category, label: b.category }),
+      sort: (a, b) => collator.compare(a.label, b.label)
+    },
+    {
+      field: "decade",
+      el: els.decadeFilter,
+      label: "Todos los años",
+      pick: (b) => (b.decadeKey ? { value: b.decadeKey, label: b.decadeLabel, start: b.decadeStart } : null),
+      sort: (a, b) => b.start - a.start
+    },
+    {
+      field: "author",
+      el: els.authorFilter,
+      label: "Todos los autores",
+      pick: (b) => ({ value: b.author, label: b.author }),
+      sort: (a, b) => collator.compare(a.label, b.label)
     }
+  ];
+
+  specs.forEach((spec) => {
+    const map = new Map();
+    state.allBooks.forEach((book) => {
+      if (!matchesBook(book, state.filters, spec.field)) return;
+      const option = spec.pick(book);
+      if (option && !map.has(option.value)) map.set(option.value, option);
+    });
+
+    if (state.filters[spec.field] && !map.has(state.filters[spec.field])) {
+      state.filters[spec.field] = "";
+    }
+
+    populateSelectOptions(
+      spec.el,
+      [...map.values()].sort(spec.sort),
+      state.filters[spec.field],
+      spec.label
+    );
   });
-  const decades = [...decadeMap.values()].sort((a, b) => b.start - a.start);
-
-  if (state.filters.decade && !decades.some((d) => d.value === state.filters.decade)) {
-    state.filters.decade = "";
-  }
-  populateSelectOptions(
-    els.decadeFilter,
-    decades,
-    state.filters.decade,
-    "Todos los años"
-  );
-
-  const booksForAuthor = state.allBooks.filter((b) => matchesBook(b, state.filters, "author"));
-  const authors = [...new Set(booksForAuthor.map((b) => b.author).filter(Boolean))]
-    .sort((a, b) => a.localeCompare(b, "es", { sensitivity: "base" }))
-    .map((author) => ({ value: author, label: author }));
-
-  if (state.filters.author && !authors.some((a) => a.value === state.filters.author)) {
-    state.filters.author = "";
-  }
-  populateSelectOptions(
-    els.authorFilter,
-    authors,
-    state.filters.author,
-    "Todos los autores"
-  );
-
-  updateFilterBadge();
 }
 
 function updateFilterBadge() {
-  let activeCount = 0;
-  if (state.filters.search.trim()) activeCount += 1;
-  if (state.filters.category) activeCount += 1;
-  if (state.filters.decade) activeCount += 1;
-  if (state.filters.author) activeCount += 1;
-  if (state.filters.sort !== "novedades") activeCount += 1;
+  const f = state.filters;
+  const activeCount =
+    (f.search.trim() ? 1 : 0) +
+    (f.category ? 1 : 0) +
+    (f.decade ? 1 : 0) +
+    (f.author ? 1 : 0) +
+    (f.sort !== "novedades" ? 1 : 0);
 
-  if (activeCount > 0) {
-    els.activeFilterBadge.textContent = String(activeCount);
-    els.activeFilterBadge.hidden = false;
-  } else {
-    els.activeFilterBadge.hidden = true;
+  els.activeFilterBadge.textContent = String(activeCount);
+  els.activeFilterBadge.hidden = activeCount === 0;
+}
+
+/* ---------- Filtros en la URL (para compartir búsquedas) ---------- */
+
+function applyFiltersFromURL() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const search = params.get("q") || "";
+    const sort = params.get("orden");
+
+    state.filters.search = search;
+    state.filters.searchNorm = normalizeText(search);
+    state.filters.category = params.get("categoria") || "";
+    state.filters.decade = params.get("decada") || "";
+    state.filters.author = params.get("autor") || "";
+    state.filters.sort = VALID_SORTS.includes(sort) ? sort : "novedades";
+
+    els.searchInput.value = search;
+    els.sortFilter.value = state.filters.sort;
+  } catch {
+    /* sin soporte de URLSearchParams: se ignora */
   }
 }
 
-function createBookCard(book) {
-  const scene = document.createElement("div");
-  scene.className = "book-card-scene";
+function syncURL() {
+  const f = state.filters;
+  const params = new URLSearchParams();
+  if (f.search.trim()) params.set("q", f.search.trim());
+  if (f.category) params.set("categoria", f.category);
+  if (f.decade) params.set("decada", f.decade);
+  if (f.author) params.set("autor", f.author);
+  if (f.sort !== "novedades") params.set("orden", f.sort);
 
-  const card = document.createElement("article");
-  card.className = "book-card";
-  card.tabIndex = 0;
-  card.setAttribute("role", "button");
-  card.setAttribute("aria-pressed", "false");
-  card.setAttribute("aria-label", `Ver ficha de ${book.title}`);
-
-  // Frente de la tarjeta: Categoría, Título, Autor, Año y Portada
-  const front = document.createElement("div");
-  front.className = "card-face card-front";
-
-  const topMeta = document.createElement("div");
-  topMeta.className = "card-top-meta";
-
-  const categorySpan = document.createElement("span");
-  categorySpan.className = "category-pill";
-  categorySpan.textContent = book.category;
-
-  const yearSpan = document.createElement("span");
-  yearSpan.className = "year-tag";
-  yearSpan.textContent = book.yearLabel;
-
-  topMeta.appendChild(categorySpan);
-  if (book.yearLabel) {
-    topMeta.appendChild(yearSpan);
+  const qs = params.toString();
+  try {
+    window.history.replaceState(null, "", qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+  } catch {
+    /* algunos entornos (p. ej. file://) no permiten replaceState */
   }
+}
 
-  const headerInfo = document.createElement("div");
-  headerInfo.className = "card-header-info";
+/* ---------- Tarjetas ---------- */
 
-  const titleEl = document.createElement("h3");
-  titleEl.className = "book-title";
-  titleEl.textContent = book.title;
+function createBookCard(book) {
+  const scene = createEl("div", "book-card-scene");
+  const card = createEl("article", "book-card");
+  const cardLabel = `Ver ficha de ${book.title}`;
 
-  const authorEl = document.createElement("p");
-  authorEl.className = "book-author";
-  authorEl.textContent = book.author;
+  /* Frente: categoría, año, título, autor y portada */
+  const front = createEl("div", "card-face card-front");
 
-  headerInfo.appendChild(titleEl);
-  headerInfo.appendChild(authorEl);
+  const topMeta = createEl("div", "card-top-meta");
+  topMeta.appendChild(createEl("span", "category-pill", book.category));
+  if (book.yearLabel) topMeta.appendChild(createEl("span", "year-tag", book.yearLabel));
 
-  const coverFrame = document.createElement("div");
-  coverFrame.className = "cover-frame";
+  const headerInfo = createEl("div", "card-header-info");
+  headerInfo.appendChild(createEl("h3", "book-title", book.title));
+  headerInfo.appendChild(createEl("p", "book-author", book.author));
 
-  const coverImg = document.createElement("img");
-  coverImg.className = "cover-image";
+  const coverFrame = createEl("div", "cover-frame");
+  const coverImg = createEl("img", "cover-image");
   coverImg.src = book.cover || FALLBACK_COVER_SVG;
   coverImg.alt = `Portada de ${book.title}`;
+  coverImg.width = 400;
+  coverImg.height = 560;
   coverImg.loading = "lazy";
-  coverImg.addEventListener("error", () => {
-    if (coverImg.src !== FALLBACK_COVER_SVG) {
-      coverImg.src = FALLBACK_COVER_SVG;
-    }
-  });
-
+  coverImg.decoding = "async";
+  coverImg.referrerPolicy = "no-referrer";
+  coverImg.addEventListener(
+    "error",
+    () => {
+      if (coverImg.src !== FALLBACK_COVER_SVG) coverImg.src = FALLBACK_COVER_SVG;
+    },
+    { once: true }
+  );
   coverFrame.appendChild(coverImg);
 
-  const hintEl = document.createElement("div");
-  hintEl.className = "flip-hint";
-  hintEl.innerHTML = `<span>Toca para ver ficha</span><span>↻</span>`;
+  const hintEl = createEl("div", "flip-hint");
+  hintEl.appendChild(createEl("span", null, "Toca para ver ficha"));
+  const hintIcon = createEl("span", null, "↻");
+  hintIcon.setAttribute("aria-hidden", "true");
+  hintEl.appendChild(hintIcon);
 
-  front.appendChild(topMeta);
-  front.appendChild(headerInfo);
-  front.appendChild(coverFrame);
-  front.appendChild(hintEl);
+  front.append(topMeta, headerInfo, coverFrame, hintEl);
 
-  // Reverso de la tarjeta: Título, Autor, Año, Descripción, Pass y botón DESCARGA
-  const back = document.createElement("div");
-  back.className = "card-face card-back";
+  /* Reverso: ficha, descripción, pass y descarga */
+  const back = createEl("div", "card-face card-back");
 
-  const backHeader = document.createElement("div");
-  backHeader.className = "back-header";
+  const backHeader = createEl("div", "back-header");
+  const backTopRow = createEl("div", "back-top-row");
+  backTopRow.appendChild(createEl("span", "category-pill", book.category));
 
-  const backTopRow = document.createElement("div");
-  backTopRow.className = "back-top-row";
-
-  const backCategory = document.createElement("span");
-  backCategory.className = "category-pill";
-  backCategory.textContent = book.category;
-
-  const flipBackBtn = document.createElement("button");
+  const flipBackBtn = createEl("button", "flip-back-btn", "Volver");
   flipBackBtn.type = "button";
-  flipBackBtn.className = "flip-back-btn";
-  flipBackBtn.textContent = "Volver";
-
-  backTopRow.appendChild(backCategory);
   backTopRow.appendChild(flipBackBtn);
 
-  const backTitle = document.createElement("h3");
-  backTitle.className = "back-title";
-  backTitle.textContent = book.title;
+  backHeader.append(
+    backTopRow,
+    createEl("h3", "back-title", book.title),
+    createEl(
+      "p",
+      "back-author-year",
+      book.yearLabel ? `${book.author} · ${book.yearLabel}` : book.author
+    )
+  );
 
-  const backAuthorYear = document.createElement("p");
-  backAuthorYear.className = "back-author-year";
-  backAuthorYear.textContent = book.yearLabel
-    ? `${book.author} · ${book.yearLabel}`
-    : book.author;
+  const descScroll = createEl("div", "back-description-scroll");
+  descScroll.appendChild(createEl("p", "back-description", book.description));
 
-  backHeader.appendChild(backTopRow);
-  backHeader.appendChild(backTitle);
-  backHeader.appendChild(backAuthorYear);
-
-  const descScroll = document.createElement("div");
-  descScroll.className = "back-description-scroll";
-
-  const descP = document.createElement("p");
-  descP.className = "back-description";
-  descP.textContent = book.description;
-  descScroll.appendChild(descP);
-
-  const backFooter = document.createElement("div");
-  backFooter.className = "back-footer";
+  const backFooter = createEl("div", "back-footer");
 
   if (book.pass) {
-    const passArea = document.createElement("div");
-    passArea.className = "pass-area";
+    const passArea = createEl("div", "pass-area");
 
-    const passBtn = document.createElement("button");
+    const passBtn = createEl("button", "btn-pass", "Ver pass");
     passBtn.type = "button";
-    passBtn.className = "btn-pass";
-    passBtn.textContent = "Ver pass";
+    passBtn.setAttribute("aria-expanded", "false");
 
-    const passBox = document.createElement("div");
-    passBox.className = "pass-value";
-    passBox.textContent = `Pass: ${book.pass}`;
+    const passBox = createEl("div", "pass-value", `Pass: ${book.pass}`);
     passBox.hidden = true;
 
-    passBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const isHidden = passBox.hidden;
-      passBox.hidden = !isHidden;
-      passBtn.textContent = isHidden ? "Ocultar pass" : "Ver pass";
+    passBtn.addEventListener("click", () => {
+      const willShow = passBox.hidden;
+      passBox.hidden = !willShow;
+      passBtn.textContent = willShow ? "Ocultar pass" : "Ver pass";
+      passBtn.setAttribute("aria-expanded", String(willShow));
     });
 
-    passArea.appendChild(passBtn);
-    passArea.appendChild(passBox);
+    passArea.append(passBtn, passBox);
     backFooter.appendChild(passArea);
   }
 
   if (book.link) {
-    const downloadLink = document.createElement("a");
-    downloadLink.className = "download-btn";
+    const downloadLink = createEl("a", "download-btn", "DESCARGA");
     downloadLink.href = book.link;
     downloadLink.target = "_blank";
     downloadLink.rel = "noopener noreferrer";
-    downloadLink.textContent = "DESCARGA";
-    downloadLink.addEventListener("click", (e) => {
-      e.stopPropagation();
-    });
+    downloadLink.appendChild(createEl("span", "sr-only", ` de ${book.title} (se abre en una pestaña nueva)`));
     backFooter.appendChild(downloadLink);
   } else {
-    const notice = document.createElement("p");
-    notice.className = "link-notice";
-    notice.textContent = "Enlace no disponible";
-    backFooter.appendChild(notice);
+    backFooter.appendChild(createEl("p", "link-notice", "Enlace no disponible"));
   }
 
-  back.appendChild(backHeader);
-  back.appendChild(descScroll);
-  back.appendChild(backFooter);
-
-  card.appendChild(front);
-  card.appendChild(back);
+  back.append(backHeader, descScroll, backFooter);
+  card.append(front, back);
   scene.appendChild(card);
 
-  const toggleFlip = (forceState = null) => {
-    const nextFlipped =
-      typeof forceState === "boolean" ? forceState : !card.classList.contains("is-flipped");
-    card.classList.toggle("is-flipped", nextFlipped);
-    card.setAttribute("aria-pressed", String(nextFlipped));
+  /* Giro: la cara oculta queda "inert" para que el teclado y los lectores de pantalla no lleguen a ella */
+  const setFlipped = (flipped, moveFocus = true) => {
+    card.classList.toggle("is-flipped", flipped);
+    front.inert = flipped;
+    back.inert = !flipped;
+
+    if (flipped) {
+      card.removeAttribute("role");
+      card.removeAttribute("aria-label");
+      card.tabIndex = -1;
+      if (moveFocus) flipBackBtn.focus({ preventScroll: true });
+    } else {
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", cardLabel);
+      card.tabIndex = 0;
+      if (moveFocus) card.focus({ preventScroll: true });
+    }
   };
 
+  setFlipped(false, false);
+
   card.addEventListener("click", (e) => {
-    if (e.target.closest("a, button, .back-description-scroll")) {
-      return;
-    }
-    toggleFlip();
+    if (e.target.closest("a, button, .back-description-scroll")) return;
+    setFlipped(!card.classList.contains("is-flipped"));
   });
 
-  flipBackBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleFlip(false);
-  });
+  flipBackBtn.addEventListener("click", () => setFlipped(false));
 
   card.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      if (document.activeElement === card) {
-        e.preventDefault();
-        toggleFlip();
-      }
-    } else if (e.key === "Escape" && card.classList.contains("is-flipped")) {
-      toggleFlip(false);
+    const flipped = card.classList.contains("is-flipped");
+    if ((e.key === "Enter" || e.key === " ") && e.target === card && !flipped) {
+      e.preventDefault();
+      setFlipped(true);
+    } else if (e.key === "Escape" && flipped) {
+      setFlipped(false);
     }
   });
 
   return scene;
 }
 
-function renderCatalog() {
-  const booksToShow = getFilteredAndSortedBooks();
+/* ---------- Render ---------- */
+
+function renderCatalog(append = false) {
+  const list = append ? state.currentList : getFilteredAndSortedBooks();
   const totalCount = state.allBooks.length;
 
+  state.currentList = list;
   els.totalBooksFooter.textContent = `Libros disponibles: ${totalCount}`;
+  els.resultsCounter.textContent = `Mostrando ${list.length} de ${totalCount} libros`;
 
-  if (booksToShow.length === 0) {
+  if (list.length === 0) {
+    els.booksGrid.replaceChildren();
     els.booksGrid.hidden = true;
+    els.loadMoreWrap.hidden = true;
     els.emptyState.hidden = false;
-    els.resultsCounter.textContent = `Mostrando 0 de ${totalCount} libros`;
+    state.rendered = 0;
     return;
   }
 
   els.emptyState.hidden = true;
   els.booksGrid.hidden = false;
 
+  const from = append ? state.rendered : 0;
+  const to = Math.min(state.visibleCount, list.length);
+
+  if (!append) els.booksGrid.replaceChildren();
+
   const fragment = document.createDocumentFragment();
-  booksToShow.forEach((book) => {
-    fragment.appendChild(createBookCard(book));
-  });
-
-  els.booksGrid.innerHTML = "";
+  for (let i = from; i < to; i += 1) {
+    fragment.appendChild(createBookCard(list[i]));
+  }
   els.booksGrid.appendChild(fragment);
+  state.rendered = to;
 
-  els.resultsCounter.textContent = `Mostrando ${booksToShow.length} de ${totalCount} libros`;
+  const remaining = list.length - to;
+  els.loadMoreWrap.hidden = remaining <= 0;
+  if (remaining > 0) {
+    els.loadMoreBtn.textContent = `Mostrar más libros (${remaining} restantes)`;
+  }
 }
 
+// Punto único de actualización cuando cambia cualquier filtro.
+function refresh() {
+  state.visibleCount = PAGE_SIZE;
+  updateDynamicFilterOptions();
+  updateFilterBadge();
+  syncURL();
+  renderCatalog(false);
+}
+
+let searchTimer = null;
+
 function resetAllFilters() {
+  clearTimeout(searchTimer);
+
   state.filters.search = "";
+  state.filters.searchNorm = "";
   state.filters.category = "";
   state.filters.decade = "";
   state.filters.author = "";
@@ -512,9 +573,10 @@ function resetAllFilters() {
   els.searchInput.value = "";
   els.sortFilter.value = "novedades";
 
-  updateDynamicFilterOptions();
-  renderCatalog();
+  refresh();
 }
+
+/* ---------- Eventos ---------- */
 
 function bindEvents() {
   els.toggleFiltersBtn.addEventListener("click", () => {
@@ -523,64 +585,142 @@ function bindEvents() {
   });
 
   els.searchInput.addEventListener("input", (e) => {
-    state.filters.search = e.target.value;
-    updateDynamicFilterOptions();
-    renderCatalog();
+    const value = e.target.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      state.filters.search = value;
+      state.filters.searchNorm = normalizeText(value);
+      refresh();
+    }, SEARCH_DEBOUNCE_MS);
   });
 
-  els.categoryFilter.addEventListener("change", (e) => {
-    state.filters.category = e.target.value;
-    updateDynamicFilterOptions();
-    renderCatalog();
-  });
-
-  els.decadeFilter.addEventListener("change", (e) => {
-    state.filters.decade = e.target.value;
-    updateDynamicFilterOptions();
-    renderCatalog();
-  });
-
-  els.authorFilter.addEventListener("change", (e) => {
-    state.filters.author = e.target.value;
-    updateDynamicFilterOptions();
-    renderCatalog();
-  });
-
-  els.sortFilter.addEventListener("change", (e) => {
-    state.filters.sort = e.target.value;
-    renderCatalog();
+  [
+    [els.categoryFilter, "category"],
+    [els.decadeFilter, "decade"],
+    [els.authorFilter, "author"],
+    [els.sortFilter, "sort"]
+  ].forEach(([select, field]) => {
+    select.addEventListener("change", (e) => {
+      state.filters[field] = e.target.value;
+      refresh();
+    });
   });
 
   els.clearFiltersBtn.addEventListener("click", resetAllFilters);
   els.emptyResetBtn.addEventListener("click", resetAllFilters);
 
+  els.loadMoreBtn.addEventListener("click", () => {
+    const before = state.rendered;
+    state.visibleCount += PAGE_SIZE;
+    renderCatalog(true);
+
+    // Si el botón desaparece, el foco pasa a la primera tarjeta nueva en lugar de perderse.
+    if (els.loadMoreWrap.hidden) {
+      const firstNew = els.booksGrid.children[before];
+      if (firstNew) firstNew.querySelector(".book-card")?.focus({ preventScroll: true });
+    }
+  });
+
   els.brandReset.addEventListener("click", (e) => {
     e.preventDefault();
     resetAllFilters();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
   });
 }
 
-async function initCatalog() {
-  bindEvents();
+/* ---------- Carga de datos (caché local + actualización en segundo plano) ---------- */
+
+function readCache() {
+  try {
+    return window.localStorage.getItem(CACHE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(text) {
+  try {
+    window.localStorage.setItem(CACHE_KEY, text);
+  } catch {
+    /* almacenamiento lleno o bloqueado: se ignora */
+  }
+}
+
+async function fetchCatalogText() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(TSV_URL, { cache: "no-store", signal: controller.signal });
+    if (!response.ok) throw new Error(`Error de red: ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function showStatus(message) {
+  els.statusMessage.hidden = false;
+  els.statusMessage.textContent = message;
+}
+
+function showLoadError() {
+  els.resultsCounter.textContent = "No se pudo cargar el catálogo";
+  els.statusMessage.hidden = false;
+
+  const retryBtn = createEl("button", "btn-primary", "Reintentar");
+  retryBtn.type = "button";
+  retryBtn.addEventListener("click", () => {
+    showStatus("Cargando biblioteca desde Google Sheets...");
+    els.resultsCounter.textContent = "Cargando catálogo...";
+    loadCatalog();
+  });
+
+  els.statusMessage.replaceChildren(
+    createEl(
+      "p",
+      null,
+      "No se pudo cargar el catálogo en este momento. Revisa tu conexión e inténtalo de nuevo."
+    ),
+    retryBtn
+  );
+}
+
+function showBooks(books) {
+  state.allBooks = books;
+  els.statusMessage.hidden = true;
+  refresh();
+}
+
+async function loadCatalog() {
+  const cached = readCache();
+
+  // Con caché, el catálogo aparece al instante y se actualiza si la hoja cambió.
+  if (cached) {
+    try {
+      showBooks(parseBooks(cached));
+    } catch (error) {
+      console.warn("Caché inválida, se descarga de nuevo:", error);
+    }
+  }
 
   try {
-    const response = await fetch(TSV_URL, { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`Error de red: ${response.status}`);
+    const fresh = await fetchCatalogText();
+    if (fresh !== cached || state.allBooks.length === 0) {
+      const books = parseBooks(fresh);
+      writeCache(fresh);
+      showBooks(books);
     }
-
-    const tsvText = await response.text();
-    state.allBooks = parseTSV(tsvText);
-
-    els.statusMessage.hidden = true;
-    updateDynamicFilterOptions();
-    renderCatalog();
   } catch (error) {
     console.error("Error al cargar el catálogo:", error);
-    els.statusMessage.textContent =
-      "No se pudo cargar el catálogo desde Google Sheets en este momento. Verifica que la hoja esté publicada como TSV e inténtalo nuevamente.";
+    if (state.allBooks.length === 0) showLoadError();
   }
+}
+
+function initCatalog() {
+  bindEvents();
+  applyFiltersFromURL();
+  loadCatalog();
 }
 
 initCatalog();

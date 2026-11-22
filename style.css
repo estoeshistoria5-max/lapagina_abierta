@@ -4,7 +4,7 @@
   --bg-subtle: #ebe4d8;
   --ink-primary: #1b2420;
   --ink-secondary: #4e5b54;
-  --ink-muted: #6c7871;
+  --ink-muted: #5b6760;
   --accent-primary: #1b4332;
   --accent-primary-hover: #122e22;
   --accent-soft: #e2ede7;
@@ -688,4 +688,73 @@ body {
 
 .footer-link:hover {
   background-color: rgba(255, 255, 255, 0.24);
+}
+
+/* ===== Mejoras ===== */
+
+/* Las reglas display de las clases no deben anular el atributo hidden */
+[hidden] {
+  display: none !important;
+}
+
+.skip-link {
+  position: absolute;
+  left: 1rem;
+  top: -4rem;
+  z-index: 100;
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius-sm);
+  background-color: var(--accent-primary);
+  color: #ffffff;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* Foco visible para teclado */
+:focus-visible {
+  outline: 3px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.site-footer :focus-visible {
+  outline-color: #ffffff;
+}
+
+.books-grid {
+  scroll-margin-top: 9rem;
+}
+
+.load-more-wrap {
+  display: flex;
+  justify-content: center;
+  margin-top: 1.75rem;
+}
+
+.load-more-wrap .btn-secondary {
+  padding: 0 1.6rem;
+}
+
+.status-box .btn-primary {
+  margin-top: 1rem;
+}
+
+/* Respeta a quienes desactivan las animaciones en su sistema */
+@media (prefers-reduced-motion: reduce) {
+  .book-card,
+  .btn-secondary,
+  .btn-primary,
+  .download-btn,
+  .footer-link,
+  .filter-field input,
+  .filter-field select {
+    transition: none;
+  }
+
+  .back-description-scroll {
+    scroll-behavior: auto;
+  }
 }

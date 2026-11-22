@@ -3,19 +3,41 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>La Página Abierta</title>
+  <title>La Página Abierta · Biblioteca libre y gratuita</title>
+  <meta name="description" content="Catálogo de libros compartidos de forma libre y gratuita. Busca por título, autor, categoría o año." />
+  <meta name="theme-color" content="#1b4332" />
+
+  <!-- Vista previa al compartir en redes -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="La Página Abierta" />
+  <meta property="og:description" content="Un espacio abierto para compartir libros de forma libre y gratuita con la comunidad." />
+  <meta property="og:locale" content="es_AR" />
+
   <link rel="icon" type="image/jpeg" href="icono.jpg" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+
+  <!-- defer: no bloquea el render y se ejecuta con el DOM listo -->
+  <script src="app.js" defer></script>
 </head>
 <body>
+  <a href="#booksGrid" class="skip-link">Saltar al catálogo</a>
+
   <div class="app-shell">
     <header class="site-header">
       <div class="header-inner">
-        <a href="#" id="brandReset" class="brand" aria-label="La Página Abierta - Inicio">
-          <img src="Imágenes/logo.png" alt="Logo La Página Abierta" class="brand-logo" onerror="this.style.display='none'" />
+        <a href="./" id="brandReset" class="brand" aria-label="La Página Abierta - Inicio">
+          <img
+            src="Imágenes/logo.png"
+            alt=""
+            class="brand-logo"
+            width="42"
+            height="42"
+            decoding="async"
+            onerror="this.style.display='none'"
+          />
           <span class="brand-title">La Página Abierta</span>
         </a>
 
@@ -27,12 +49,12 @@
           aria-controls="filtersPanel"
         >
           <span>Filtros y búsqueda</span>
-          <span id="activeFilterBadge" class="filter-badge" hidden>0</span>
+          <span id="activeFilterBadge" class="filter-badge" hidden aria-label="Filtros activos">0</span>
         </button>
       </div>
 
       <section id="filtersPanel" class="filters-panel" aria-label="Filtros y búsqueda del catálogo">
-        <div class="filters-grid">
+        <div class="filters-grid" role="search">
           <div class="filter-field search-field">
             <label for="searchInput" class="sr-only">Buscar por título, autor o descripción</label>
             <input
@@ -40,6 +62,8 @@
               id="searchInput"
               placeholder="Buscar por título, autor o descripción..."
               autocomplete="off"
+              enterkeyhint="search"
+              spellcheck="false"
             />
           </div>
 
@@ -83,17 +107,27 @@
         </div>
 
         <div class="results-bar">
-          <p id="resultsCounter" class="results-counter">Cargando catálogo...</p>
+          <p id="resultsCounter" class="results-counter" role="status" aria-live="polite">Cargando catálogo...</p>
         </div>
       </section>
     </header>
 
-    <main class="catalog-main">
-      <div id="statusMessage" class="status-box" role="status">
+    <main class="catalog-main" id="contenido">
+      <div id="statusMessage" class="status-box" role="status" aria-live="polite">
         Cargando biblioteca desde Google Sheets...
       </div>
 
-      <div id="booksGrid" class="books-grid" hidden></div>
+      <noscript>
+        <div class="status-box">
+          Para ver el catálogo necesitas activar JavaScript en tu navegador.
+        </div>
+      </noscript>
+
+      <div id="booksGrid" class="books-grid" tabindex="-1" hidden></div>
+
+      <div id="loadMoreWrap" class="load-more-wrap" hidden>
+        <button type="button" id="loadMoreBtn" class="btn-secondary">Mostrar más libros</button>
+      </div>
 
       <div id="emptyState" class="status-box empty-state" hidden>
         <p class="empty-title">No se encontraron libros con los filtros seleccionados.</p>
@@ -122,7 +156,7 @@
               rel="noopener noreferrer"
               class="footer-link"
             >
-              Facebook
+              Facebook<span class="sr-only"> (se abre en una pestaña nueva)</span>
             </a>
             <a
               href="https://t.me/+yokJlU0pAHowY2Ix"
@@ -130,14 +164,12 @@
               rel="noopener noreferrer"
               class="footer-link"
             >
-              Telegram
+              Telegram<span class="sr-only"> (se abre en una pestaña nueva)</span>
             </a>
           </nav>
         </div>
       </div>
     </footer>
   </div>
-
-  <script src="app.js"></script>
 </body>
 </html>
