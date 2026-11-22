@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>La Página Abierta</title>
+  <link rel="icon" type="image/jpeg" href="icono.jpg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="site-header">
+      <div class="header-inner">
+        <a href="#" id="brandReset" class="brand" aria-label="La Página Abierta - Inicio">
+          <img src="Imágenes/logo.png" alt="Logo La Página Abierta" class="brand-logo" onerror="this.style.display='none'" />
+          <span class="brand-title">La Página Abierta</span>
+        </a>
+
+        <button
+          type="button"
+          id="toggleFiltersBtn"
+          class="mobile-filter-toggle"
+          aria-expanded="false"
+          aria-controls="filtersPanel"
+        >
+          <span>Filtros y búsqueda</span>
+          <span id="activeFilterBadge" class="filter-badge" hidden>0</span>
+        </button>
+      </div>
+
+      <section id="filtersPanel" class="filters-panel" aria-label="Filtros y búsqueda del catálogo">
+        <div class="filters-grid">
+          <div class="filter-field search-field">
+            <label for="searchInput" class="sr-only">Buscar por título, autor o descripción</label>
+            <input
+              type="search"
+              id="searchInput"
+              placeholder="Buscar por título, autor o descripción..."
+              autocomplete="off"
+            />
+          </div>
+
+          <div class="filter-field">
+            <label for="categoryFilter">Categoría</label>
+            <select id="categoryFilter">
+              <option value="">Todas las categorías</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="decadeFilter">Rango de años</label>
+            <select id="decadeFilter">
+              <option value="">Todos los años</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="authorFilter">Autor</label>
+            <select id="authorFilter">
+              <option value="">Todos los autores</option>
+            </select>
+          </div>
+
+          <div class="filter-field">
+            <label for="sortFilter">Ordenar por</label>
+            <select id="sortFilter">
+              <option value="novedades">Novedades (recientes primero)</option>
+              <option value="titulo-asc">Título (A – Z)</option>
+              <option value="autor-asc">Autor (A – Z)</option>
+              <option value="anio-desc">Año (mayor a menor)</option>
+              <option value="anio-asc">Año (menor a mayor)</option>
+            </select>
+          </div>
+
+          <div class="filter-actions">
+            <button type="button" id="clearFiltersBtn" class="btn-secondary">
+              Limpiar filtros
+            </button>
+          </div>
+        </div>
+
+        <div class="results-bar">
+          <p id="resultsCounter" class="results-counter">Cargando catálogo...</p>
+        </div>
+      </section>
+    </header>
+
+    <main class="catalog-main">
+      <div id="statusMessage" class="status-box" role="status">
+        Cargando biblioteca desde Google Sheets...
+      </div>
+
+      <div id="booksGrid" class="books-grid" hidden></div>
+
+      <div id="emptyState" class="status-box empty-state" hidden>
+        <p class="empty-title">No se encontraron libros con los filtros seleccionados.</p>
+        <p class="empty-text">Prueba con otra palabra clave, cambia la categoría o restablece los filtros.</p>
+        <button type="button" id="emptyResetBtn" class="btn-primary">
+          Limpiar filtros
+        </button>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <div class="footer-brand-block">
+          <h2 class="footer-title">La Página Abierta</h2>
+          <p class="footer-copy">
+            Un espacio abierto para compartir libros de forma libre y gratuita con la comunidad.
+          </p>
+        </div>
+
+        <div class="footer-meta-block">
+          <p id="totalBooksFooter" class="footer-counter">Libros disponibles: —</p>
+          <nav class="footer-links" aria-label="Redes sociales de La Página Abierta">
+            <a
+              href="https://www.facebook.com/profile.php?id=61596494684044"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="footer-link"
+            >
+              Facebook
+            </a>
+            <a
+              href="https://t.me/+yokJlU0pAHowY2Ix"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="footer-link"
+            >
+              Telegram
+            </a>
+          </nav>
+        </div>
+      </div>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
