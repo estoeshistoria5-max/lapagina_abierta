@@ -26,11 +26,11 @@
   <a href="#booksGrid" class="skip-link">Saltar al catálogo</a>
 
   <div class="app-shell">
-    <header class="site-header">
+    <header class="site-header" id="siteHeader">
       <div class="header-inner">
         <a href="./" id="brandReset" class="brand" aria-label="La Página Abierta - Inicio">
           <img
-            src="images/logo.png"
+            src="Imágenes/logo.png"
             alt=""
             class="brand-logo"
             width="42"
@@ -48,11 +48,18 @@
           aria-expanded="false"
           aria-controls="filtersPanel"
         >
+          <svg class="menu-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
+            <path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
           <span>Filtros y búsqueda</span>
           <span id="activeFilterBadge" class="filter-badge" hidden aria-label="Filtros activos">0</span>
         </button>
       </div>
+    </header>
 
+    <!-- El panel de filtros va fuera del header fijo: se desplaza con la página y,
+         una vez fuera de pantalla, se abre desde el menú hamburguesa. -->
+    <div class="filters-slot" id="filtersSlot">
       <section id="filtersPanel" class="filters-panel" aria-label="Filtros y búsqueda del catálogo">
         <div class="filters-grid" role="search">
           <div class="filter-field search-field">
@@ -110,7 +117,7 @@
           <p id="resultsCounter" class="results-counter" role="status" aria-live="polite">Cargando catálogo...</p>
         </div>
       </section>
-    </header>
+    </div>
 
     <main class="catalog-main" id="contenido">
       <div id="statusMessage" class="status-box" role="status" aria-live="polite">

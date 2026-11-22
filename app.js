@@ -38,6 +38,8 @@ const state = {
 };
 
 const els = {
+  siteHeader: document.getElementById("siteHeader"),
+  filtersSlot: document.getElementById("filtersSlot"),
   brandReset: document.getElementById("brandReset"),
   toggleFiltersBtn: document.getElementById("toggleFiltersBtn"),
   activeFilterBadge: document.getElementById("activeFilterBadge"),
@@ -578,11 +580,81 @@ function resetAllFilters() {
 
 /* ---------- Eventos ---------- */
 
-function bindEvents() {
-  els.toggleFiltersBtn.addEventListener("click", () => {
-    const isOpen = els.filtersPanel.classList.toggle("is-open");
-    els.toggleFiltersBtn.setAttribute("aria-expanded", String(isOpen));
+/* ---------- Menú de filtros (hamburguesa) ---------- */
+
+// Escritorio: los filtros se ven arriba de todo y se van con el scroll; al quedar fuera de pantalla
+// aparece el botón hamburguesa y el panel se abre encima del contenido, sin empujarlo.
+// Móvil: el panel siempre se abre desde el botón.
+function initFiltersMenu() {
+  const desktopMQ = window.matchMedia("(min-width: 860px)");
+  const panel = els.filtersPanel;
+  let observer = null;
+  let resizeTimer = null;
+
+  const isOpen = () => panel.classList.contains("is-open");
+
+  const setOpen = (open) => {
+    if (open === isOpen()) return;
+
+    if (open) {
+      // En escritorio el panel sale del flujo: se reserva su altura para que el contenido no salte.
+      if (desktopMQ.matches) els.filtersSlot.style.minHeight = `${panel.offsetHeight}px`;
+      panel.classList.add("is-open");
+    } else {
+      panel.classList.remove("is-open");
+      els.filtersSlot.style.minHeight = "";
+    }
+    els.toggleFiltersBtn.setAttribute("aria-expanded", String(open));
+  };
+
+  const observeSlot = () => {
+    const barHeight = els.siteHeader.offsetHeight;
+    document.documentElement.style.setProperty("--bar-h", `${barHeight}px`);
+
+    if (!("IntersectionObserver" in window)) return;
+    if (observer) observer.disconnect();
+
+    observer = new IntersectionObserver(
+      ([entry]) => {
+        const offscreen = !entry.isIntersecting;
+        document.body.classList.toggle("filters-offscreen", offscreen);
+        // Si el usuario vuelve arriba, el panel regresa a su lugar en la página.
+        if (!offscreen && desktopMQ.matches) setOpen(false);
+      },
+      { rootMargin: `-${barHeight}px 0px 0px 0px` }
+    );
+    observer.observe(els.filtersSlot);
+  };
+
+  els.toggleFiltersBtn.addEventListener("click", () => setOpen(!isOpen()));
+
+  document.addEventListener("click", (e) => {
+    if (isOpen() && !e.target.closest("#filtersPanel, #toggleFiltersBtn")) setOpen(false);
   });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isOpen()) {
+      setOpen(false);
+      els.toggleFiltersBtn.focus();
+    }
+  });
+
+  desktopMQ.addEventListener("change", () => {
+    setOpen(false);
+    observeSlot();
+  });
+
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(observeSlot, 150);
+  });
+
+  window.addEventListener("load", observeSlot);
+  observeSlot();
+}
+
+function bindEvents() {
+  initFiltersMenu();
 
   els.searchInput.addEventListener("input", (e) => {
     const value = e.target.value;

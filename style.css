@@ -15,7 +15,8 @@
   --radius-sm: 8px;
   --radius-md: 14px;
   --radius-lg: 18px;
-  --card-height: 490px;
+  /* Se adapta al alto de la pantalla: la tarjeta entera cabe aun con la barra y los filtros visibles */
+  --card-height: clamp(380px, calc(100dvh - 240px), 460px);
 }
 
 *,
@@ -123,24 +124,43 @@ body {
   font-weight: 700;
 }
 
+/* Panel de filtros: en escritorio queda acoplado al inicio de la página y se va con el scroll.
+   En móvil, o en escritorio cuando ya salió de pantalla, se despliega desde el menú hamburguesa. */
 .filters-panel {
   width: 100%;
-  padding: 0 clamp(1rem, 3vw, 2.5rem) 0.9rem;
+  padding: 0.85rem clamp(1rem, 3vw, 2.5rem) 0.9rem;
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-color);
   display: none;
 }
 
 .filters-panel.is-open {
   display: block;
+  position: fixed;
+  top: var(--bar-h, 68px);
+  left: 0;
+  right: 0;
+  z-index: 29;
+  max-height: calc(100dvh - var(--bar-h, 68px));
+  overflow-y: auto;
+  box-shadow: 0 18px 32px -16px rgba(27, 36, 32, 0.35);
+}
+
+.menu-icon {
+  flex-shrink: 0;
 }
 
 @media (min-width: 860px) {
+  .filters-panel {
+    display: block;
+  }
+
   .mobile-filter-toggle {
     display: none;
   }
 
-  .filters-panel,
-  .filters-panel.is-open {
-    display: block;
+  .filters-offscreen .mobile-filter-toggle {
+    display: inline-flex;
   }
 }
 
@@ -725,7 +745,7 @@ body {
 }
 
 .books-grid {
-  scroll-margin-top: 9rem;
+  scroll-margin-top: calc(var(--bar-h, 68px) + 1rem);
 }
 
 .load-more-wrap {
